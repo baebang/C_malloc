@@ -39,7 +39,6 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE))) // 다음 블록의 포인터
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))   // 이전 블록의 포인터
 
-static char *heap_listp; // 힙의 시작 주소
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
@@ -48,14 +47,13 @@ static void place(void *bp, size_t asize);
 int mm_init(void)
 {
     // 초기 힙 생성
+    char *heap_listp;
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1) // 4워드 크기의 힙 생성, heap_listp에 힙의 시작 주소값 할당
         return -1;
     PUT(heap_listp, 0);                            // 정렬 패딩
     PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1)); // 프롤로그 Header
     PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); // 프롤로그 Footer
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));     // 에필로그 Header: 프로그램이 할당한 마지막 블록의 뒤에 위치하며, 블록이 할당되지 않은 상태를 나타냄
-
-    heap_listp += (2 * WSIZE); // 힙의 첫번째 블록의 포인터
 
     // 힙을 CHUNKSIZE bytes로 확장
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
@@ -107,7 +105,6 @@ void *mm_realloc(void *ptr, size_t size)
     if (ptr == NULL) // 포인터가 NULL인 경우 할당만 수행
     {
         return mm_malloc(size);
-        return;
     }
     if (size <= 0) // size가 0인 경우 메모리 반환만 수행
     {
@@ -182,7 +179,7 @@ static void *coalesce(void *bp)
 
 static void *find_fit(size_t asize)
 {
-    void *bp = NEXT_BLKP(heap_listp);
+    void *bp = mem_heap_lo() + 2 * WSIZE; // 힙의 첫 부분 + 8bytes
     while (GET_SIZE(HDRP(bp)) > 0)
     {
         if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
@@ -202,8 +199,8 @@ static void place(void *bp, size_t asize)
     {
         PUT(HDRP(bp), PACK(asize, 1)); // 현재 블록에는 필요한 만큼만 할당
         PUT(FTRP(bp), PACK(asize, 1));
-        bp = NEXT_BLKP(bp); // 다음 블록으로 이동
 
+        bp = NEXT_BLKP(bp);                    // 다음 블록으로 이동
         PUT(HDRP(bp), PACK(csize - asize, 0)); // 남은 크기를 다음 블록에 할당(가용 블록)
         PUT(FTRP(bp), PACK(csize - asize, 0));
     }
