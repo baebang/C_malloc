@@ -66,10 +66,13 @@ team_t team = {
 #define PRED_FREEP(bp) (*(void**)(bp)) 
 #define SUCC_FREEP(bp) (*(void**)(bp+WSIZE))
 
+// 분리 가용 리스트 배열 index 수
+#define NUM_LISTS 32 
+
 // heap 의 첫번째 포인터
 static char* heap_listp;
 // explicit을 위한 free 포인터 설정
-static char* free_listp;
+static char* free_listp[NUM_LISTS];
 
 // alloction을 위한 함수 선언
 static void *extend_heap(size_t words);
@@ -82,24 +85,24 @@ void remove_block(void *bp);
 void insert_freeBlock(void *bp);
 
 
+
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
-{   
-    if ((heap_listp = mem_sbrk(6*WSIZE)) == (void *) - 1) // prev,와 next가 들어가므로 24byte로 늘려줌
+{
+    for (int i=0; i < NUM_LISTS; i++){
+        free_listp[i] = NULL;
+    }
+    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *) - 1) // prev,와 next를 사용하지 않으므로 4사이즈 할당
         return -1; //유효성 검사
 
     PUT(heap_listp, 0);                              // heap의 첫 패딩 - free(0) 값 넣어준다                                    
-    PUT(heap_listp + (1*WSIZE), PACK(DSIZE*2, 1));     // heap의 Prolog 헤더           
-    PUT(heap_listp + (2*WSIZE), NULL);               // Prolog prev 헤더 (이거 굳이 안쓰는디...)         
-    PUT(heap_listp + (3*WSIZE), NULL);               // Prolog next 헤더         
-    PUT(heap_listp + (4*WSIZE), PACK(DSIZE*2, 1));     // heap의 Prolog 푸터              
-    PUT(heap_listp + (5*WSIZE), PACK(0, 1));         // heap의 Epilog  
+    PUT(heap_listp + (1*WSIZE), PACK(DSIZE*2, 1));     // heap의 Prolog 헤더                 
+    PUT(heap_listp + (2*WSIZE), PACK(DSIZE*2, 1));     // heap의 Prolog 푸터              
+    PUT(heap_listp + (3*WSIZE), PACK(0, 1));         // heap의 Epilog  
 
-    // heap_listp += (2 * WSIZE);
-    free_listp = heap_listp + DSIZE; // free_listp를 pred 포인터를 가리키게 초기화
-
+    heap_listp += (2 * WSIZE);
     
     // extend_heap 을 통해 heap을 요청
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL){ 
@@ -126,6 +129,20 @@ static void *extend_heap(size_t words)
    
     return coalesce(bp);
 }
+
+/* 
+ * find_index - 블럭 사이즈를 기반으로 free_array배열에 들어가게 될 index를 반환하는 함수
+ */
+static int find_index(size_t asize){
+    int index;
+    for(index = 0;index<NUM_LISTS;index++){
+        if(asize <= (1<< index)){
+            return index;
+        }
+    }
+    return index;
+}
+
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
@@ -172,13 +189,13 @@ void *mm_malloc(size_t size)
  */
 static void *find_fit(size_t asize) 
 {
+    int index = find_index(asize);
     void *bp;
 
-    // 프롤로그 블록을 만날때까지 탐색을 진행한다
-    for (bp = free_listp; GET_ALLOC(HDRP(bp)) != 1; bp = SUCC_FREEP(bp)) {
-        // ALLOC 상태는 확인했으니 사이즈만 확인한다
-        if ((GET_SIZE(HDRP(bp))) >= asize){
-            return bp;
+    for(int i = index; i < NUM_LISTS; i ++) {
+        for (bp = free_listp[i]; bp != NULL; bp = SUCC_FREEP(bp)) {
+            if (GET_SIZE(HDRP(bp)) >= asize)
+                return bp;
         }
     }
     return NULL;
@@ -212,10 +229,19 @@ static void place(void *bp, size_t asize) {
 */ 
 void insert_freeBlock(void *bp)
 {
-    SUCC_FREEP(bp) = free_listp;
-    PRED_FREEP(bp) = NULL;
-    PRED_FREEP(free_listp) = bp;
-    free_listp = bp;
+    int index = find_index(GET_SIZE(HDRP(bp)));
+
+    if(free_listp[index] == NULL){
+        SUCC_FREEP(bp) = NULL;
+        PRED_FREEP(bp) = NULL;
+        free_listp[index] = bp;
+    }
+    else{
+        PRED_FREEP(bp) = NULL;
+        SUCC_FREEP(bp) = free_listp[index];
+        PRED_FREEP(free_listp[index]) = bp;
+        free_listp[index] = bp;
+    }
 }
 
 /*
@@ -223,13 +249,25 @@ void insert_freeBlock(void *bp)
 */
 void remove_block(void *bp)
 {
-    if(bp == free_listp)
-    {
-        PRED_FREEP(SUCC_FREEP(bp)) = NULL;
-        free_listp = SUCC_FREEP(bp);
-    } else {
-        SUCC_FREEP(PRED_FREEP(bp)) = SUCC_FREEP(bp);
-        PRED_FREEP(SUCC_FREEP(bp)) = PRED_FREEP(bp);
+    int index = find_index(GET_SIZE(HDRP(bp)));
+
+    if(free_listp[index] != bp){
+        if(SUCC_FREEP(bp) != NULL){
+            PRED_FREEP(SUCC_FREEP(bp)) = PRED_FREEP(bp);
+            SUCC_FREEP(PRED_FREEP(bp)) = SUCC_FREEP(bp);
+        }
+        else{
+            SUCC_FREEP(PRED_FREEP(bp)) = NULL;
+        }
+    }
+    else{
+        if(SUCC_FREEP(bp) != NULL){
+            PRED_FREEP(SUCC_FREEP(bp)) = NULL;
+            free_listp[index] = SUCC_FREEP(bp);
+        }
+        else{
+            free_listp[index] = NULL;
+        }
     }
 }
 
